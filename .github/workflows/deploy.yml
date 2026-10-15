@@ -1,0 +1,58 @@
+name: Deploy site
+
+# Runs whenever a project publishes (a push to site/*) or the deployer itself
+# changes. Assembles every registered project's newest publish plus the
+# landing page, and deploys the whole site in one go.
+on:
+  push:
+    branches: [main, "site/**"]
+  workflow_dispatch:
+
+# One deploy at a time, never cancelled halfway. If several publishes land
+# while one runs, GitHub keeps only the newest pending run, and that run picks
+# up every branch's latest state anyway.
+concurrency:
+  group: deploy-site
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      HAS_CLOUDFLARE: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
+    steps:
+      # The workflow runs from whichever branch triggered it, but the site is
+      # always assembled by main's code and main's projects.json.
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun test tests
+
+      - name: Assemble the site
+        run: bun run build
+
+      # Always downloadable from the run, with or without Cloudflare set up.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: site
+          path: dist
+          retention-days: 7
+
+      - name: Deploy to Cloudflare Pages
+        if: env.HAS_CLOUDFLARE == 'true'
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy dist --project-name=${{ vars.PAGES_PROJECT || 'docs-deployer' }} --branch=main
+
+      - name: Note the skipped deploy
+        if: env.HAS_CLOUDFLARE != 'true'
+        run: echo "::notice::CLOUDFLARE_API_TOKEN is not set; the site was assembled (see the 'site' artifact) but not deployed."

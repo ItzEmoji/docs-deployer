@@ -1,0 +1,14 @@
+{
+  "projects": [
+    {
+      "path": "aeroflare",
+      "title": "Aeroflare",
+      "description": "OCI-backed Nix binary cache proxy."
+    },
+    {
+      "path": "platform",
+      "title": "Docs platform",
+      "description": "How docs.itzemoji.com works, and how to publish a project to it."
+    }
+  ]
+}

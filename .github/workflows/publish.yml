@@ -1,0 +1,102 @@
+name: Publish docs
+
+# Called from a project repo. Builds that project's docs and force-pushes the
+# output to its own branch here, site/<path>. Every project owns exactly one
+# branch, so projects never race each other, and the force-push means the
+# branch is always a single commit: no history piles up.
+#
+#   jobs:
+#     docs:
+#       uses: ItzEmoji/docs-deployer/.github/workflows/publish.yml@main
+#       with:
+#         path: aeroflare
+#         build: bun install --frozen-lockfile && bun run build
+#         output: build
+#         app-client-id: ${{ vars.DOCS_APP_CLIENT_ID }}
+#       secrets:
+#         app-private-key: ${{ secrets.DOCS_APP_PRIVATE_KEY }}
+
+on:
+  workflow_call:
+    inputs:
+      path:
+        description: Where the project is served (/<path>/). Must match its entry in projects.json.
+        required: true
+        type: string
+      build:
+        description: Shell command that builds the site. Gets DOCS_BASE_PATH (/<path>/) and DOCS_SITE_URL.
+        required: true
+        type: string
+      output:
+        description: Directory the build writes to, relative to the repo root.
+        required: true
+        type: string
+      app-client-id:
+        description: Client ID of the GitHub App allowed to push to docs-deployer.
+        required: true
+        type: string
+    secrets:
+      app-private-key:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # A newer publish of the same project makes an older one pointless.
+    concurrency:
+      group: docs-publish-${{ inputs.path }}
+      cancel-in-progress: true
+    env:
+      DOCS_PATH: ${{ inputs.path }}
+      OUTPUT: ${{ inputs.output }}
+    steps:
+      - name: Check the path
+        run: |
+          if [[ ! "$DOCS_PATH" =~ ^[a-z0-9][a-z0-9-]*$ || "$DOCS_PATH" == fonts ]]; then
+            echo "::error::path \"$DOCS_PATH\" must be lowercase letters, digits and dashes, and not \"fonts\""
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Build
+        env:
+          BUILD: ${{ inputs.build }}
+          DOCS_BASE_PATH: /${{ inputs.path }}/
+          DOCS_SITE_URL: https://docs.itzemoji.com
+        run: eval "$BUILD"
+
+      - name: Check the output
+        run: |
+          if [[ ! -f "$OUTPUT/index.html" ]]; then
+            echo "::error::$OUTPUT/index.html does not exist; is \"output\" the directory the build writes to?"
+            exit 1
+          fi
+
+      - uses: actions/create-github-app-token@v3
+        id: token
+        with:
+          client-id: ${{ inputs.app-client-id }}
+          private-key: ${{ secrets.app-private-key }}
+          owner: ItzEmoji
+          repositories: docs-deployer
+
+      - name: Push to site/${{ inputs.path }}
+        env:
+          TOKEN: ${{ steps.token.outputs.token }}
+        run: |
+          set -euo pipefail
+          cd "$OUTPUT"
+          git init -q -b "site/$DOCS_PATH"
+          git config user.name  "itzemoji-docs[bot]"
+          git config user.email "itzemoji-docs[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "$DOCS_PATH: $GITHUB_REPOSITORY@${GITHUB_SHA::7}"
+          git push -q -f "https://x-access-token:${TOKEN}@github.com/ItzEmoji/docs-deployer.git" "HEAD:refs/heads/site/$DOCS_PATH"
+          echo "Published $GITHUB_REPOSITORY@${GITHUB_SHA::7} to site/$DOCS_PATH" >> "$GITHUB_STEP_SUMMARY"
